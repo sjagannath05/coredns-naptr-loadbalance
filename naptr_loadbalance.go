@@ -15,12 +15,13 @@ var plog = log.NewWithPlugin("naptr_loadbalance")
 
 // NaptrLoadBalance is a plugin that shuffles NAPTR records in responses.
 type NaptrLoadBalance struct {
-	Next plugin.Handler
+	Next   plugin.Handler
+	Single bool // When true, return only one NAPTR record per response
 }
 
 // ServeDNS implements the plugin.Handler interface.
 func (n NaptrLoadBalance) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) (int, error) {
-	rw := &naptrResponseWriter{ResponseWriter: w}
+	rw := &naptrResponseWriter{ResponseWriter: w, single: n.Single}
 	return plugin.NextOrFailure(n.Name(), n.Next, ctx, rw, r)
 }
 
@@ -30,6 +31,7 @@ func (n NaptrLoadBalance) Name() string { return "naptr_loadbalance" }
 // naptrResponseWriter is a response writer that shuffles NAPTR records.
 type naptrResponseWriter struct {
 	dns.ResponseWriter
+	single bool
 }
 
 // WriteMsg implements the dns.ResponseWriter interface.
@@ -42,9 +44,9 @@ func (w *naptrResponseWriter) WriteMsg(res *dns.Msg) error {
 		return w.ResponseWriter.WriteMsg(res)
 	}
 
-	res.Answer = shuffleNaptr(res.Answer)
-	res.Ns = shuffleNaptr(res.Ns)
-	res.Extra = shuffleNaptr(res.Extra)
+	res.Answer = shuffleNaptr(res.Answer, w.single)
+	res.Ns = shuffleNaptr(res.Ns, w.single)
+	res.Extra = shuffleNaptr(res.Extra, w.single)
 
 	return w.ResponseWriter.WriteMsg(res)
 }
@@ -56,7 +58,8 @@ func (w *naptrResponseWriter) Write(buf []byte) (int, error) {
 }
 
 // shuffleNaptr separates NAPTR records, shuffles them, and reassembles.
-func shuffleNaptr(in []dns.RR) []dns.RR {
+// When single is true, only the first NAPTR after shuffling is returned.
+func shuffleNaptr(in []dns.RR, single bool) []dns.RR {
 	naptr := []dns.RR{}
 	rest := []dns.RR{}
 	for _, r := range in {
@@ -72,6 +75,10 @@ func shuffleNaptr(in []dns.RR) []dns.RR {
 	}
 
 	shuffleRecords(naptr)
+
+	if single {
+		return append(rest, naptr[0])
+	}
 	return append(rest, naptr...)
 }
 
